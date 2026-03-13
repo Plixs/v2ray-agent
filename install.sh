@@ -699,6 +699,7 @@ allowPort() {
     fi
     # 如果防火墙启动状态则添加相应的开放端口
     if command -v dpkg >/dev/null 2>&1 && dpkg -l | grep -q "^[[:space:]]*ii[[:space:]]\+ufw"; then
+		echoContent red " ---> 防火墙iptable添加端口0：$2 " 
         if ufw status | grep -q "Status: active"; then
             if ! ufw status | grep -q "$1/${type}"; then
                 sudo ufw allow "$1/${type}"
@@ -706,6 +707,7 @@ allowPort() {
             fi
         fi
     elif systemctl status firewalld 2>/dev/null | grep -q "active (running)"; then
+		echoContent red " ---> 防火墙iptable添加端口1：$2 " 
         local updateFirewalldStatus=
         if ! firewall-cmd --list-ports --permanent | grep -qw "$1/${type}"; then
             updateFirewalldStatus=true
@@ -721,6 +723,7 @@ allowPort() {
             firewall-cmd --reload
         fi
     elif rc-update show 2>/dev/null | grep -q ufw; then
+		echoContent red " ---> 防火墙iptable添加端口2：$2 " 
         if ufw status | grep -q "Status: active"; then
             if ! ufw status | grep -q "$1/${type}"; then
                 sudo ufw allow "$1/${type}"
@@ -728,9 +731,9 @@ allowPort() {
             fi
         fi
     elif dpkg -l | grep -q "^[[:space:]]*ii[[:space:]]\+netfilter-persistent" && systemctl status netfilter-persistent 2>/dev/null | grep -q "active (exited)"; then
+		echoContent red " ---> 防火墙iptable添加端口3：$2 " 
         local updateFirewalldStatus=
         if ! iptables -L | grep -q "$1/${type}(mack-a)"; then
-			echoContent red " ---> 防火墙iptable添加端口：" $2
             updateFirewalldStatus=true
             iptables -I INPUT -p "${type}" --dport "$1" -m comment --comment "allow $1/${type}(mack-a)" -j ACCEPT
         fi
