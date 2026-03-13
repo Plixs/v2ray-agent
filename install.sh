@@ -699,7 +699,6 @@ allowPort() {
     fi
     # 如果防火墙启动状态则添加相应的开放端口
     if command -v dpkg >/dev/null 2>&1 && dpkg -l | grep -q "^[[:space:]]*ii[[:space:]]\+ufw"; then
-		echoContent red " ---> 防火墙iptable添加端口0：$2 " 
         if ufw status | grep -q "Status: active"; then
             if ! ufw status | grep -q "$1/${type}"; then
                 sudo ufw allow "$1/${type}"
@@ -707,7 +706,6 @@ allowPort() {
             fi
         fi
     elif systemctl status firewalld 2>/dev/null | grep -q "active (running)"; then
-		echoContent red " ---> 防火墙iptable添加端口1：$2 " 
         local updateFirewalldStatus=
         if ! firewall-cmd --list-ports --permanent | grep -qw "$1/${type}"; then
             updateFirewalldStatus=true
@@ -723,7 +721,6 @@ allowPort() {
             firewall-cmd --reload
         fi
     elif rc-update show 2>/dev/null | grep -q ufw; then
-		echoContent red " ---> 防火墙iptable添加端口2：$2 " 
         if ufw status | grep -q "Status: active"; then
             if ! ufw status | grep -q "$1/${type}"; then
                 sudo ufw allow "$1/${type}"
@@ -731,10 +728,8 @@ allowPort() {
             fi
         fi
     elif dpkg -l | grep -q "^[[:space:]]*ii[[:space:]]\+netfilter-persistent" && systemctl status netfilter-persistent 2>/dev/null | grep -q "active (exited)"; then
-		echoContent red " ---> 防火墙iptable添加端口3：$1 " 
         local updateFirewalldStatus=
         if ! iptables -L | grep -q "$1/${type}(mack-a)"; then
-			echoContent red " ---> 防火墙iptable添加端口4：{$1} " 
             updateFirewalldStatus=true
             iptables -I INPUT -p "${type}" --dport "$1" -m comment --comment "allow $1/${type}(mack-a)" -j ACCEPT
         fi
@@ -1373,6 +1368,28 @@ installWarp() {
     fi
 }
 
+safe_curl() {
+    local url="$1"
+    # 1. 提取域名
+    local domain=$(echo "$url" | awk -F[/:] '{print $4}')
+    local port=$(echo "$url" | awk -F[/:] '{print $5}')
+    [[ -z "$port" ]] && ( [[ "$url" == https* ]] && port=443 || port=80 )
+
+    # 2. 获取域名解析后的真实公网 IP
+    local remote_ip=$(getent hosts "$domain" | awk '{print $1}' | head -n 1)
+
+    # 3. 获取本机所有网卡的 IP 地址（排除 127.0.0.1）
+    local local_ips=$(hostname -I)
+
+    # 4. 判断逻辑
+    if [[ $local_ips == *"$remote_ip"* ]] && [[ -n "$remote_ip" ]]; then
+        # 如果解析出的 IP 在本机网卡列表里，说明是访问自己
+        curl -s -m 10 --resolve "${domain}:${port}:127.0.0.1" "$url"
+    else
+        # 否则是正常外部访问
+        curl -s -m 10 "$url"
+    fi
+}
 # 通过dns检查域名的IP
 checkDNSIP() {
     local domain=$1
@@ -1404,6 +1421,28 @@ checkDNSIP() {
         exit 0
     else
         echoContent green " ---> 域名IP校验通过"
+    fi
+}
+safe_curl() {
+    local url="$1"
+    # 1. 提取域名
+    local domain=$(echo "$url" | awk -F[/:] '{print $4}')
+    local port=$(echo "$url" | awk -F[/:] '{print $5}')
+    [[ -z "$port" ]] && ( [[ "$url" == https* ]] && port=443 || port=80 )
+
+    # 2. 获取域名解析后的真实公网 IP
+    local remote_ip=$(getent hosts "$domain" | awk '{print $1}' | head -n 1)
+
+    # 3. 获取本机所有网卡的 IP 地址（排除 127.0.0.1）
+    local local_ips=$(hostname -I)
+
+    # 4. 判断逻辑
+    if [[ $local_ips == *"$remote_ip"* ]] && [[ -n "$remote_ip" ]]; then
+        # 如果解析出的 IP 在本机网卡列表里，说明是访问自己
+        curl -s -m 10 --resolve "${domain}:${port}:127.0.0.1" "$url"
+    else
+        # 否则是正常外部访问
+        curl -s -m 10 "$url"
     fi
 }
 # 检查端口实际开放状态
@@ -1446,8 +1485,8 @@ server {
 EOF
         handleNginx start
         # 检查域名+端口的开放
-        checkPortOpenResult=$(curl -v -m 60 "http://${domain}:${port}/checkPort")
-        localIP=$(curl -v -m 60 "http://${domain}:${port}/ip")
+        checkPortOpenResult=$(safe_curl "http://${domain}:${port}/checkPort")
+        localIP=$(safe_curl "http://${domain}:${port}/ip")
         rm "${nginxConfigPath}checkPortOpen.conf"
         handleNginx stop
 
