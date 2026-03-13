@@ -2179,7 +2179,6 @@ handleNginx() {
             fi
         else
             echoContent green " ---> Nginx启动成功"
-			sudo netstat -tulpn | grep nginx
         fi
 
     elif [[ -n $(pgrep -f "nginx") ]] && [[ "$1" == "stop" ]]; then
