@@ -1450,6 +1450,9 @@ EOF
         localIP=$(curl -s -m 10 "http://${domain}:${port}/ip")
         rm "${nginxConfigPath}checkPortOpen.conf"
         handleNginx stop
+
+		echoContent green " ---> checkPortOpenResult: $checkPortOpenResult, ${domain}, ${port} "
+		
         if [[ "${checkPortOpenResult}" == "fjkvymb6len" ]]; then
             echoContent green " ---> 检测到${port}端口已开放"
         else
