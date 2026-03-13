@@ -1370,23 +1370,29 @@ installWarp() {
 
 safe_curl() {
     local url="$1"
-    # 1. 提取域名
-    local domain=$(echo "$url" | awk -F[/:] '{print $4}')
-    local port=$(echo "$url" | awk -F[/:] '{print $5}')
-    [[ -z "$port" ]] && ( [[ "$url" == https* ]] && port=443 || port=80 )
 
-    # 2. 获取域名解析后的真实公网 IP
+    # 1. 自动提取域名 (例如从 http://my-vps.com:4838/file 提取 my-vps.com)
+    local domain=$(echo "$url" | awk -F[/:] '{print $4}')
+
+    # 2. 自动提取端口 (从 URL 中找数字端口，找不到则根据 http/https 补全)
+    local port=$(echo "$url" | awk -F[/:] '{print $5}')
+    if [[ -z "$port" ]] || [[ "$port" =~ [^0-9] ]]; then
+        [[ "$url" == https* ]] && port=443 || port=80
+    fi
+
+    # 3. 获取域名解析出的 IP
     local remote_ip=$(getent hosts "$domain" | awk '{print $1}' | head -n 1)
 
-    # 3. 获取本机所有网卡的 IP 地址（排除 127.0.0.1）
+    # 4. 获取本机所有网卡 IP
     local local_ips=$(hostname -I)
 
-    # 4. 判断逻辑
-    if [[ $local_ips == *"$remote_ip"* ]] && [[ -n "$remote_ip" ]]; then
-        # 如果解析出的 IP 在本机网卡列表里，说明是访问自己
+    # 5. 核心逻辑判断
+    if [[ -n "$remote_ip" ]] && [[ " $local_ips " == *" $remote_ip "* ]]; then
+        # 匹配成功：域名指向本机，强制走 127.0.0.1 闭环访问
+        echo "[Debug] 命中回环限制，已自动重定向至 127.0.0.1" >&2
         curl -s -m 10 --resolve "${domain}:${port}:127.0.0.1" "$url"
     else
-        # 否则是正常外部访问
+        # 正常流程：外部访问或解析失败
         curl -s -m 10 "$url"
     fi
 }
