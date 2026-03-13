@@ -1404,64 +1404,60 @@ safe_curl() {
     local url="$1"
     local type="${2:-4}" # 默认 IPv4
 
-    # 颜色定义 (只用于调试，不影响数据)
+    # 颜色定义 (仅用于调试输出至 stderr)
     local RED='\033[0;31m'
     local GREEN='\033[0;32m'
     local YELLOW='\033[0;33m'
     local BLUE='\033[0;34m'
-    local NC='\033[0m' # 无颜色
+    local NC='\033[0m'
 
-    echo -e "${BLUE}[Step 1] 解析 URL...${NC}" >&2
-    # 提取域名和端口
+    # --- Step 1: 解析 URL 提取域名和端口 ---
     local domain=$(echo "$url" | awk -F[/:] '{print $4}')
     local port=$(echo "$url" | awk -F[/:] '{print $5}')
     if [[ -z "$port" ]] || [[ "$port" =~ [^0-9] ]]; then
         [[ "$url" == https* ]] && port=443 || port=80
     fi
-    echo -e "         目标域名: ${YELLOW}$domain${NC}, 端口: ${YELLOW}$port${NC}" >&2
+    echo -e "${BLUE}[Step 1] 解析目标:${NC} 域名=${YELLOW}$domain${NC}, 端口=${YELLOW}$port${NC}" >&2
 
-    # 获取域名解析出的真实 IP
-    echo -e "${BLUE}[Step 2] 解析 DNS...${NC}" >&2
+    # --- Step 2: 获取域名解析 IP (Remote IP) ---
     local remote_ip=$(getent hosts "$domain" | awk '{print $1}' | head -n 1)
-    echo -e "         域名解析 IP: ${YELLOW}${remote_ip:-"解析失败"}${NC}" >&2
+    echo -e "${BLUE}[Step 2] 域名解析 IP:${NC} ${YELLOW}${remote_ip:-"解析失败"}${NC}" >&2
 
-    # 获取本机内网 IP
+    # --- Step 3: 获取本机公网与内网 IP ---
+    # 获取内网 IP 列表
     local local_ips=$(hostname -I 2>/dev/null)
-    
-    # 使用 Cloudflare 获取本机公网 IP
-    echo -e "${BLUE}[Step 3] 获取本机公网 IP (Cloudflare)...${NC}" >&2
+    # 获取公网 IP (使用 Cloudflare 接口)
     local currentIP=$(curl -s "-${type}" --connect-timeout 5 http://www.cloudflare.com | grep "ip=" | awk -F "=" '{print $2}')
     
-    # 自动重试 IPv6 (如果 IPv4 失败)
+    # 如果初次获取失败，尝试自动切换协议栈 (4/6 互换)
     if [[ -z "${currentIP}" ]]; then
-        echo -e "         IPv4 获取失败，尝试切换协议..." >&2
         local alt_type=$([[ "$type" == "4" ]] && echo "6" || echo "4")
         currentIP=$(curl -s "-${alt_type}" --connect-timeout 5 http://www.cloudflare.com | grep "ip=" | awk -F "=" '{print $2}')
     fi
-    echo -e "         本机公网 IP: ${YELLOW}${currentIP:-"获取失败"}${NC}" >&2
+    echo -e "${BLUE}[Step 3] 本机公网 IP:${NC} ${YELLOW}${currentIP:-"获取失败"}${NC}" >&2
     echo -e "         本机内网 IP: ${YELLOW}${local_ips}${NC}" >&2
 
-    # 核心逻辑匹配
-    echo -e "${BLUE}[Step 4] 匹配回环逻辑...${NC}" >&2
+    # --- Step 4: 匹配回环逻辑 ---
     local is_loopback=false
     if [[ -n "$remote_ip" ]]; then
-        if [[ "$remote_ip" == "$currentIP" ]] || [[ " $local_ips " == *" $remote_ip "* ]]; then
+        # 匹配条件：1.等于公网IP 2.存在于内网IP列表 3.模糊匹配(处理IPv6映射)
+        if [[ "$remote_ip" == "$currentIP" ]] || [[ " $local_ips " == *" $remote_ip "* ]] || [[ "$remote_ip" == *"$currentIP"* ]]; then
             is_loopback=true
         fi
     fi
 
-    # 执行最终请求
+    # --- Step 5: 执行请求 ---
     if [ "$is_loopback" = true ]; then
-        echo -e "${GREEN}[Success] 匹配成功！检测到回环访问，强制重定向至 127.0.0.1${NC}" >&2
-        # 注意：此处输出的是文件内容，不会带颜色
-        curl -s -m 15 --resolve "${domain}:${port}:127.0.0.1" "$url"
+        echo -e "${GREEN}[Success] 确认回环！强制重定向至 127.0.0.1 绕过内核限制${NC}" >&2
+        # --resolve 是修复 Error 28 的核心工具
+        curl -s -L -m 15 --resolve "${domain}:${port}:127.0.0.1" "$url"
     else
         echo -e "${YELLOW}[Info] 未匹配到回环，执行常规公网请求...${NC}" >&2
-        curl -s -m 15 "$url"
+        curl -s -L -m 15 "$url"
     fi
     
     local exit_code=$?
-    [ $exit_code -ne 0 ] && echo -e "${RED}[Error] curl 最终退出码: $exit_code${NC}" >&2
+    [ $exit_code -ne 0 ] && echo -e "${RED}[Error] curl 最终失败，退出码: $exit_code${NC}" >&2
     return $exit_code
 }
 # 检查端口实际开放状态
