@@ -1431,23 +1431,34 @@ checkDNSIP() {
 }
 safe_curl() {
     local url="$1"
-    # 1. 提取域名
+    
+    # 1. 提取域名 (支持 http/https 且兼容带端口的情况)
     local domain=$(echo "$url" | awk -F[/:] '{print $4}')
+    
+    # 2. 提取端口 (如果没写，默认 80)
     local port=$(echo "$url" | awk -F[/:] '{print $5}')
-    [[ -z "$port" ]] && ( [[ "$url" == https* ]] && port=443 || port=80 )
+    if [[ -z "$port" ]] || [[ "$port" =~ [^0-9] ]]; then
+        [[ "$url" == https* ]] && port=443 || port=80
+    fi
 
-    # 2. 获取域名解析后的真实公网 IP
+    # 3. 获取域名解析 IP (增加兼容性处理)
     local remote_ip=$(getent hosts "$domain" | awk '{print $1}' | head -n 1)
-
-    # 3. 获取本机所有网卡的 IP 地址（排除 127.0.0.1）
+    
+    # 4. 获取本机所有 IP (排除 127.0.0.1)
     local local_ips=$(hostname -I)
 
-    # 4. 判断逻辑
-    if [[ $local_ips == *"$remote_ip"* ]] && [[ -n "$remote_ip" ]]; then
-        # 如果解析出的 IP 在本机网卡列表里，说明是访问自己
+    # --- 调试信息：输出到标准错误 (不会被变量捕获) ---
+    echo -e "\033[31m[Debug] URL: $url\033[0m" >&2
+    echo -e "\033[31m[Debug] 解析域名: $domain, 端口: $port\033[0m" >&2
+    echo -e "\033[31m[Debug] 域名解析IP: $remote_ip\033[0m" >&2
+    echo -e "\033[31m[Debug] 本机网卡IP: $local_ips\033[0m" >&2
+
+    # 5. 判断并执行 (修正匹配逻辑)
+    if [[ -n "$remote_ip" ]] && [[ " $local_ips " == *" $remote_ip "* ]]; then
+        echo -e "\033[32m[Info] 匹配到回环，正在通过 127.0.0.1 请求...\033[0m" >&2
         curl -s -m 10 --resolve "${domain}:${port}:127.0.0.1" "$url"
     else
-        # 否则是正常外部访问
+        echo -e "\033[33m[Info] 未匹配回环，正常请求...\033[0m" >&2
         curl -s -m 10 "$url"
     fi
 }
