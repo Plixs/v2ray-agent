@@ -1367,35 +1367,6 @@ installWarp() {
         echoContent green " ---> WARP启动成功"
     fi
 }
-
-safe_curl() {
-    local url="$1"
-
-    # 1. 自动提取域名 (例如从 http://my-vps.com:4838/file 提取 my-vps.com)
-    local domain=$(echo "$url" | awk -F[/:] '{print $4}')
-
-    # 2. 自动提取端口 (从 URL 中找数字端口，找不到则根据 http/https 补全)
-    local port=$(echo "$url" | awk -F[/:] '{print $5}')
-    if [[ -z "$port" ]] || [[ "$port" =~ [^0-9] ]]; then
-        [[ "$url" == https* ]] && port=443 || port=80
-    fi
-
-    # 3. 获取域名解析出的 IP
-    local remote_ip=$(getent hosts "$domain" | awk '{print $1}' | head -n 1)
-
-    # 4. 获取本机所有网卡 IP
-    local local_ips=$(hostname -I)
-
-    # 5. 核心逻辑判断
-    if [[ -n "$remote_ip" ]] && [[ " $local_ips " == *" $remote_ip "* ]]; then
-        # 匹配成功：域名指向本机，强制走 127.0.0.1 闭环访问
-        echo "[Debug] 命中回环限制，已自动重定向至 127.0.0.1" >&2
-        curl -s -m 10 --resolve "${domain}:${port}:127.0.0.1" "$url"
-    else
-        # 正常流程：外部访问或解析失败
-        curl -s -m 10 "$url"
-    fi
-}
 # 通过dns检查域名的IP
 checkDNSIP() {
     local domain=$1
@@ -1431,36 +1402,67 @@ checkDNSIP() {
 }
 safe_curl() {
     local url="$1"
-    
-    # 1. 提取域名 (支持 http/https 且兼容带端口的情况)
+    local type="${2:-4}" # 默认 IPv4
+
+    # 颜色定义 (只用于调试，不影响数据)
+    local RED='\033[0;31m'
+    local GREEN='\033[0;32m'
+    local YELLOW='\033[0;33m'
+    local BLUE='\033[0;34m'
+    local NC='\033[0m' # 无颜色
+
+    echo -e "${BLUE}[Step 1] 解析 URL...${NC}" >&2
+    # 提取域名和端口
     local domain=$(echo "$url" | awk -F[/:] '{print $4}')
-    
-    # 2. 提取端口 (如果没写，默认 80)
     local port=$(echo "$url" | awk -F[/:] '{print $5}')
     if [[ -z "$port" ]] || [[ "$port" =~ [^0-9] ]]; then
         [[ "$url" == https* ]] && port=443 || port=80
     fi
+    echo -e "         目标域名: ${YELLOW}$domain${NC}, 端口: ${YELLOW}$port${NC}" >&2
 
-    # 3. 获取域名解析 IP (增加兼容性处理)
+    # 获取域名解析出的真实 IP
+    echo -e "${BLUE}[Step 2] 解析 DNS...${NC}" >&2
     local remote_ip=$(getent hosts "$domain" | awk '{print $1}' | head -n 1)
+    echo -e "         域名解析 IP: ${YELLOW}${remote_ip:-"解析失败"}${NC}" >&2
+
+    # 获取本机内网 IP
+    local local_ips=$(hostname -I 2>/dev/null)
     
-    # 4. 获取本机所有 IP (排除 127.0.0.1)
-    local local_ips=$(hostname -I)
-
-    # --- 调试信息：输出到标准错误 (不会被变量捕获) ---
-    echo -e "\033[31m[Debug] URL: $url\033[0m" >&2
-    echo -e "\033[31m[Debug] 解析域名: $domain, 端口: $port\033[0m" >&2
-    echo -e "\033[31m[Debug] 域名解析IP: $remote_ip\033[0m" >&2
-    echo -e "\033[31m[Debug] 本机网卡IP: $local_ips\033[0m" >&2
-
-    # 5. 判断并执行 (修正匹配逻辑)
-    if [[ -n "$remote_ip" ]] && [[ " $local_ips " == *" $remote_ip "* ]]; then
-        echo -e "\033[32m[Info] 匹配到回环，正在通过 127.0.0.1 请求...\033[0m" >&2
-        curl -s -m 10 --resolve "${domain}:${port}:127.0.0.1" "$url"
-    else
-        echo -e "\033[33m[Info] 未匹配回环，正常请求...\033[0m" >&2
-        curl -s -m 10 "$url"
+    # 使用 Cloudflare 获取本机公网 IP
+    echo -e "${BLUE}[Step 3] 获取本机公网 IP (Cloudflare)...${NC}" >&2
+    local currentIP=$(curl -s "-${type}" --connect-timeout 5 http://www.cloudflare.com | grep "ip=" | awk -F "=" '{print $2}')
+    
+    # 自动重试 IPv6 (如果 IPv4 失败)
+    if [[ -z "${currentIP}" ]]; then
+        echo -e "         IPv4 获取失败，尝试切换协议..." >&2
+        local alt_type=$([[ "$type" == "4" ]] && echo "6" || echo "4")
+        currentIP=$(curl -s "-${alt_type}" --connect-timeout 5 http://www.cloudflare.com | grep "ip=" | awk -F "=" '{print $2}')
     fi
+    echo -e "         本机公网 IP: ${YELLOW}${currentIP:-"获取失败"}${NC}" >&2
+    echo -e "         本机内网 IP: ${YELLOW}${local_ips}${NC}" >&2
+
+    # 核心逻辑匹配
+    echo -e "${BLUE}[Step 4] 匹配回环逻辑...${NC}" >&2
+    local is_loopback=false
+    if [[ -n "$remote_ip" ]]; then
+        if [[ "$remote_ip" == "$currentIP" ]] || [[ " $local_ips " == *" $remote_ip "* ]]; then
+            is_loopback=true
+        fi
+    fi
+
+    # 执行最终请求
+    if [ "$is_loopback" = true ]; then
+        echo -e "${GREEN}[Success] 匹配成功！检测到回环访问，强制重定向至 127.0.0.1${NC}" >&2
+        # 注意：此处输出的是文件内容，不会带颜色
+        curl -s -m 15 --resolve "${domain}:${port}:127.0.0.1" "$url"
+    else
+        echo -e "${YELLOW}[Info] 未匹配到回环，执行常规公网请求...${NC}" >&2
+        curl -s -m 15 "$url"
+    fi
+    
+    local exit_code=$?
+    [ $exit_code -ne 0 ] && echo -e "${RED}[Error] curl 最终退出码: $exit_code${NC}" >&2
+    return $exit_code
 }
 # 检查端口实际开放状态
 checkPortOpen() {
