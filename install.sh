@@ -730,6 +730,7 @@ allowPort() {
     elif dpkg -l | grep -q "^[[:space:]]*ii[[:space:]]\+netfilter-persistent" && systemctl status netfilter-persistent 2>/dev/null | grep -q "active (exited)"; then
         local updateFirewalldStatus=
         if ! iptables -L | grep -q "$1/${type}(mack-a)"; then
+			echoContent red " ---> 防火墙iptable添加端口：" $2
             updateFirewalldStatus=true
             iptables -I INPUT -p "${type}" --dport "$1" -m comment --comment "allow $1/${type}(mack-a)" -j ACCEPT
         fi
