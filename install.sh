@@ -1446,7 +1446,6 @@ server {
 EOF
         handleNginx start
         # 检查域名+端口的开放
-		ping ${domain}
         checkPortOpenResult=$(curl -m 60 "http://${domain}:${port}/checkPort")
         localIP=$(curl -m 60 "http://${domain}:${port}/ip")
         rm "${nginxConfigPath}checkPortOpen.conf"
